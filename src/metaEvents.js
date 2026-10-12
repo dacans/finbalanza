@@ -41,12 +41,19 @@ function send(name, ...args) {
   }
 }
 
-// Llamar exclusivamente después de que addDoc confirme el guardado.
+// Llamar cuando el usuario envía el formulario.
 // El ID se usa solo para deduplicar en memoria; no se envía a Meta.
 export function logCompleteRegistration(leadId) {
   if (!leadId || registeredLeads.has(leadId)) return;
   registeredLeads.add(leadId);
   send(AppEventsLogger.AppEvents.CompletedRegistration);
+}
+
+// Evento estándar "Enviar solicitud" con el tier del router — igual que Android:
+// solo se manda para los perfiles A/B (los que un CPS puede aprobar), así una campaña
+// optimizada a este evento busca usuarios que sí convierten.
+export function logSubmitApplication(tier) {
+  send(AppEventsLogger.AppEvents.SubmitApplication, { tier: String(tier || "") });
 }
 
 async function logFirstAdImpression(params) {

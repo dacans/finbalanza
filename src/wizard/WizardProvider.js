@@ -1,36 +1,33 @@
 import { createContext, useContext, useState } from "react";
 
+// Respuestas del formulario (igual que Android MX 1.4). Se quedan en el teléfono:
+// a Firestore solo sube el tier y el perfil (ver src/user/userStore.js).
+const VACIO = {
+  // Paso 1
+  nombre: "",
+  apellidos: "",
+  // Paso 2
+  montoDeseado: "",
+  // Paso 3
+  ine: "",
+  cuenta: "",
+  // Paso 4
+  situacionLaboral: "",
+  // Paso 5
+  ingresosMensuales: "",
+  prestamosActivos: "",
+};
+
 const WizardContext = createContext(null);
 
 export function WizardProvider({ children }) {
-  const [data, setData] = useState({
-    // Step 1
-    loan_amount: 5000,
-    // Step 2
-    first_name: "",
-    last_name: "",
-    email: "",
-    phone: "",
-    // Step 3
-    employment_status: "",
-    monthly_income: "",
-  });
+  const [data, setData] = useState(VACIO);
 
   const update = (patch) => {
     setData((prev) => ({ ...prev, ...patch }));
   };
 
-  const reset = () => {
-    setData({
-      loan_amount: 5000,
-      first_name: "",
-      last_name: "",
-      email: "",
-      phone: "",
-      employment_status: "",
-      monthly_income: "",
-    });
-  };
+  const reset = () => setData(VACIO);
 
   return (
     <WizardContext.Provider value={{ data, update, reset }}>

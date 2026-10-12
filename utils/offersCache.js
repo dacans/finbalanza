@@ -1,22 +1,21 @@
+// Ofertas desde Firestore (offers/all, campo "offers"), las mismas que se editan en el panel iOS.
+// Solo México. Cada oferta trae los campos del router (lmOfferId, tipo CPS/CPL, requiereClabe,
+// prioridadA..D); ver src/router/router.js.
 import { doc, getDoc } from "firebase/firestore";
-import { getCountry } from "./countryConfig";
+import { ofertasActivas } from "../src/router/router";
 
 let _offers = [];
-let _loadedForCountry = null;
+let _loaded = false;
 
 export async function loadOffers(db) {
   try {
     const snap = await getDoc(doc(db, "offers", "all"));
-    if (!snap.exists()) return;
-    const country = getCountry();
-    _offers = (snap.data().offers ?? [])
-      .filter((o) => o.activa === true && o.country === country)
-      .sort((a, b) => a.orden - b.orden);
-    _loadedForCountry = country;
+    _offers = snap.exists() ? ofertasActivas(snap.data().offers) : [];
+    _loaded = true;
   } catch {
-    _offers = [];
-    _loadedForCountry = null;
+    // Sin red: se queda con lo último que tenía
   }
+  return _offers;
 }
 
 export function getOffers() {
@@ -24,5 +23,5 @@ export function getOffers() {
 }
 
 export function offersStale() {
-  return _offers.length === 0 || _loadedForCountry !== getCountry();
+  return !_loaded || _offers.length === 0;
 }

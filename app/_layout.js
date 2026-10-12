@@ -6,16 +6,15 @@ import { Stack, router, usePathname } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, AppState, Linking, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { AppEventsLogger } from "react-native-fbsdk-next";
-import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { firestore } from "../src/firebase";
 import { registerForPushTokenAsync } from "../notifications/push";
 import { WizardProvider } from "../src/wizard/WizardProvider";
-import { getCountry, loadCountry } from "../utils/countryConfig";
 import { loadOffers } from "../utils/offersCache";
+import { loadRemoteConfig } from "../src/config/remoteConfig";
+import { guardarPushToken, iniciarProduccion } from "../src/user/userStore";
 import { getCountryCode, getCachedCountryCode } from "../src/health/db";
 import { getTrackingPermissionsAsync, requestTrackingPermissionsAsync } from "expo-tracking-transparency";
 import { initializeMeta, syncMetaTrackingPermission } from "../src/metaEvents";
-import { initAppsFlyer } from "../services/appsflyer";
 
 const GREEN = "#2E86DE";
 
@@ -30,23 +29,18 @@ Notifications.setNotificationHandler({
   }),
 });
 
-function makeId(len = 24) {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  let out = "";
-  for (let i = 0; i < len; i++) {
-    out += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return out;
-}
-
-async function getOrCreateDeviceId() {
-  const key = "device_id";
-  const existing = await AsyncStorage.getItem(key);
-  if (existing) return existing;
-  const id = makeId();
-  await AsyncStorage.setItem(key, id);
-  return id;
-}
+// Rutas del flujo de préstamos (showWizard: true)
+const RUTAS_FORMULARIO = [
+  "/wizard/intro",
+  "/wizard/step1",
+  "/wizard/step2",
+  "/wizard/step3",
+  "/wizard/step4",
+  "/wizard/step5",
+  "/analyzing",
+];
+// A dónde pueden mandar las notificaciones (data.screen)
+const PANTALLAS_PUSH = { home: "/home", offers: "/offers" };
 
 export default function RootLayout() {
   Clarity.initialize(CLARITY_ID, { logLevel: Clarity.LogLevel.None });
@@ -58,8 +52,9 @@ export default function RootLayout() {
   const [gateReady, setGateReady] = useState(false);
   const [isConnected, setIsConnected] = useState(null);
   const [wizardCompleted, setWizardCompleted] = useState(false);
-  const [introSeen, setIntroSeen] = useState(false);
   const [showWizard, setShowWizard] = useState(null);
+  // Pantalla pedida por una notificación tocada (se abre cuando la app ya está lista)
+  const [pantallaPush, setPantallaPush] = useState(null);
   // Código de país elegido por el usuario en /balance/onboarding (null = no elegido aún)
   const [countryCode, setCountryCode] = useState(null);
 
@@ -79,18 +74,15 @@ export default function RootLayout() {
     try { AppEventsLogger.logEvent("app_open"); } catch {}
   }, []);
 
-  // ATT + APPSFLYER — independiente del init de Firebase/AdMob (no altera su orden)
+  // ATT (Meta / AdMob) — independiente del init de Firebase/AdMob (no altera su orden)
   useEffect(() => {
     (async () => {
       try {
-        // En iOS pide permiso de seguimiento ANTES de inicializar AppsFlyer
         if (Platform.OS === "ios") {
           const { status } = await requestTrackingPermissionsAsync();
           void syncMetaTrackingPermission(status);
         }
       } catch {}
-      // Inicializa AppsFlyer tras resolver el ATT
-      try { initAppsFlyer(); } catch {}
     })();
     const subscription = AppState.addEventListener("change", (state) => {
       if (state !== "active" || Platform.OS !== "ios") return;
@@ -101,26 +93,12 @@ export default function RootLayout() {
     return () => subscription.remove();
   }, []);
 
-  // PUSH TOKEN
+  // PUSH TOKEN — se guarda en el teléfono; se sube a Firestore solo en el flujo de préstamos
   useEffect(() => {
     (async () => {
       try {
         const token = await registerForPushTokenAsync();
-        if (!token) return;
-        const storedToken = await AsyncStorage.getItem("push_token");
-        if (token === storedToken) return;
-        await AsyncStorage.setItem("push_token", token);
-        const deviceId = await getOrCreateDeviceId();
-        await setDoc(
-          doc(firestore, "devices", deviceId),
-          {
-            expo_push_token: token,
-            platform: Platform.OS,
-            updated_at: serverTimestamp(),
-            country: getCountry(),
-          },
-          { merge: true }
-        );
+        if (token) await guardarPushToken(token);
       } catch {}
     })();
   }, []);
@@ -130,30 +108,22 @@ export default function RootLayout() {
     (async () => {
       let sw = false;
       let wc = false;
-      let is = false;
       let cc = null;
       try {
-        await loadCountry();
-        await loadOffers(firestore);
+        const cfg = await loadRemoteConfig(firestore);
+        sw = cfg.showWizard;
+        if (sw) {
+          await loadOffers(firestore);
+          // Documento de la instalación (para el push por estado) + push token
+          iniciarProduccion();
+        }
         wc = (await AsyncStorage.getItem("wizard_completed")) === "true";
-        if (wc) {
-          const hasStep = await AsyncStorage.getItem("current_step");
-          if (!hasStep) await AsyncStorage.setItem("current_step", "1");
-        }
-        is = (await AsyncStorage.getItem("intro_seen")) === "true";
-        try {
-          const snap = await getDoc(doc(firestore, "config", "app"));
-          sw = snap.exists() ? Boolean(snap.data()?.showWizard) : false;
-        } catch {
-          sw = false;
-        }
         // Lee el país guardado en SQLite (solo para la rama /balance)
         try { cc = await getCountryCode(); } catch {}
       } catch {
         // fail abierto
       } finally {
         setWizardCompleted(wc);
-        setIntroSeen(is);
         setShowWizard(sw);
         setCountryCode(cc);
         setBootstrapped(true);
@@ -166,8 +136,6 @@ export default function RootLayout() {
     if (!bootstrapped) return;
     (async () => {
       try {
-        const is = (await AsyncStorage.getItem("intro_seen")) === "true";
-        if (is !== introSeen) setIntroSeen(is);
         const wc = (await AsyncStorage.getItem("wizard_completed")) === "true";
         if (wc !== wizardCompleted) setWizardCompleted(wc);
         // Refresca el país después de que el usuario lo elija en /balance/onboarding
@@ -177,17 +145,17 @@ export default function RootLayout() {
     })();
   }, [pathname, bootstrapped]);
 
-  // PUSH LISTENER — si la notificación trae data.url, la abre externamente
+  // PUSH LISTENER — data.url la abre externamente; data.screen (home/offers) navega dentro de la app
   useEffect(() => {
-    // Procesa la respuesta a una notificación tocada
     const handleResponse = (response) => {
       try {
         const data = response?.notification?.request?.content?.data;
         if (data?.url) {
           // https:// → Safari ; https://wa.me/... → WhatsApp
           Linking.openURL(data.url);
+          return;
         }
-        // Si no hay data.url, se respeta el flujo actual (no se navega aquí)
+        if (data?.screen && PANTALLAS_PUSH[data.screen]) setPantallaPush(data.screen);
       } catch {}
     };
 
@@ -201,6 +169,14 @@ export default function RootLayout() {
     return () => sub.remove();
   }, []);
 
+  // Abre la pantalla de la notificación cuando ya pasó el gate (solo flujo de préstamos con solicitud enviada)
+  useEffect(() => {
+    if (!gateReady || !pantallaPush) return;
+    const destino = PANTALLAS_PUSH[pantallaPush];
+    setPantallaPush(null);
+    if (showWizard && wizardCompleted && destino && pathname !== destino) router.push(destino);
+  }, [gateReady, pantallaPush, showWizard, wizardCompleted]);
+
   // GATE
   useEffect(() => {
     if (!bootstrapped) return;
@@ -208,17 +184,7 @@ export default function RootLayout() {
 
     if (showWizard) {
       if (!wizardCompleted) {
-        const allowedPaths = [
-          "/wizard/intro",
-          "/wizard/country",
-          "/wizard/step1",
-          "/wizard/step2",
-          "/wizard/step3",
-          "/analyzing",
-          "/verification",
-          "/waiting",
-        ];
-        if (!allowedPaths.includes(pathname)) {
+        if (!RUTAS_FORMULARIO.includes(pathname)) {
           router.replace("/wizard/intro");
           return;
         }
@@ -229,15 +195,11 @@ export default function RootLayout() {
         router.replace("/home");
         return;
       }
-      if (pathname === "/verification") {
-        setGateReady(true);
-        return;
-      }
       setGateReady(true);
       return;
     }
 
-    // Rama /balance — funciona offline (on-device)
+    // Rama /balance (versión educativa) — funciona offline (on-device). No se toca.
     const balancePaths = [
       "/balance",
       "/balance/onboarding",
@@ -260,7 +222,7 @@ export default function RootLayout() {
       return;
     }
     setGateReady(true);
-  }, [bootstrapped, pathname, showWizard, wizardCompleted, introSeen, countryCode]);
+  }, [bootstrapped, pathname, showWizard, wizardCompleted, countryCode]);
 
   // NO INTERNET — solo bloquea la rama de producción (showWizard:true)
   // La rama /balance funciona completamente offline (on-device)
@@ -299,14 +261,13 @@ export default function RootLayout() {
         <Stack.Screen name="home" options={{ headerShown: false }} />
         <Stack.Screen name="offers" options={{ headerShown: false }} />
         <Stack.Screen name="analyzing" options={{ headerShown: false }} />
-        <Stack.Screen name="verification" options={{ headerShown: false }} />
-        <Stack.Screen name="daily-verify" options={{ headerShown: false }} />
         <Stack.Screen name="legal" options={{ headerShown: false }} />
-        <Stack.Screen name="wizard/country" options={{ headerShown: false }} />
         <Stack.Screen name="wizard/intro" options={{ headerShown: false }} />
         <Stack.Screen name="wizard/step1" options={{ headerShown: false }} />
         <Stack.Screen name="wizard/step2" options={{ headerShown: false }} />
         <Stack.Screen name="wizard/step3" options={{ headerShown: false }} />
+        <Stack.Screen name="wizard/step4" options={{ headerShown: false }} />
+        <Stack.Screen name="wizard/step5" options={{ headerShown: false }} />
         <Stack.Screen name="waiting" options={{ headerShown: false }} />
         <Stack.Screen name="balance/index" options={{ headerShown: false }} />
         <Stack.Screen name="balance/onboarding" options={{ headerShown: false }} />

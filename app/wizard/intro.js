@@ -56,7 +56,7 @@ export default function WizardIntro() {
 
           <Pressable
             style={styles.button}
-            onPress={() => router.replace("/wizard/country")}
+            onPress={() => router.replace("/wizard/step1")}
           >
             <Text style={styles.buttonText}>Solicitar préstamo</Text>
           </Pressable>

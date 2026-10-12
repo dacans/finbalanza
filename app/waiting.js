@@ -29,7 +29,7 @@ export default function Waiting() {
         <Text style={styles.title}>Tu asesor está trabajando en tu caso</Text>
         <Text style={styles.subtitle}>
           Estamos revisando tu expediente y verificando las mejores opciones
-          disponibles para ti. Este proceso toma entre 18 y 24 horas.
+          disponibles para ti. Te avisaremos por notificación cuando tus opciones estén listas.
         </Text>
 
         <View style={styles.infoCard}>
@@ -40,12 +40,12 @@ export default function Waiting() {
           <View style={styles.infoDivider} />
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>Próximo paso</Text>
-            <Text style={styles.infoValue}>Verificación final</Text>
+            <Text style={styles.infoValue}>Ver tus ofertas</Text>
           </View>
           <View style={styles.infoDivider} />
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>Notificación</Text>
-            <Text style={styles.infoValueAccent}>En 18 - 24 horas</Text>
+            <Text style={styles.infoValueAccent}>Te avisamos al estar lista</Text>
           </View>
         </View>
 

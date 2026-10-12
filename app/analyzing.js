@@ -1,19 +1,14 @@
 import * as Clarity from '@microsoft/react-native-clarity';
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import { Animated, Easing, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { AdEventType, InterstitialAd } from "react-native-google-mobile-ads";
-import { addDoc, collection, doc, serverTimestamp, setDoc } from "firebase/firestore";
 import { COLORS } from "../constants/theme";
 import { trackInterstitialRevenue } from "../src/adRevenue";
 import { AD_UNITS } from "../src/admob";
-import { logCompleteRegistration } from "../src/metaEvents";
-import { logEvent } from "../src/analytics";
-import { firestore } from "../src/firebase";
+import { enviarSolicitud } from "../src/user/userStore";
 import { useWizard } from "../src/wizard/WizardProvider";
-import { getCountry } from "../utils/countryConfig";
 
 const STEPS = [
   { label: "Verificando identidad...", duration: 1800 },
@@ -90,56 +85,14 @@ export default function Analyzing() {
     };
   }, []);
 
+  // Envía la solicitud: respuestas solo en el teléfono; a Firestore va el tier + perfil
+  // (ver src/user/userStore.js). Programa la notificación local de desbloqueo.
   const saveLead = async () => {
     if (savedRef.current) return;
     savedRef.current = true;
-
     try {
-      const deviceId = await AsyncStorage.getItem("device_id");
-      const pushToken = await AsyncStorage.getItem("push_token");
-      const now = new Date();
-      const contactTo = new Date(now.getTime() + 1 * 86400000); // D+1
-
-      const leadRef = await addDoc(collection(firestore, "leads"), {
-        firstName: data.first_name,
-        lastName: data.last_name,
-        email: data.email,
-        phone: data.phone,
-        loanAmount: data.loan_amount,
-        employmentStatus: data.employment_status,
-        monthlyIncome: data.monthly_income,
-        country: getCountry(),
-        pushToken: pushToken ?? null,
-        createdAt: serverTimestamp(),
-        contactTo,
-        wizardCompleted: true,
-      });
-
-      logCompleteRegistration(leadRef.id);
-
-      await AsyncStorage.setItem("lead_id", leadRef.id);
-      await AsyncStorage.setItem("lead_first_name", data.first_name);
-      await AsyncStorage.setItem("lead_amount", String(data.loan_amount));
-
-      await logEvent("loan_application_completed", {
-        country: getCountry(),
-        amount: data.loan_amount,
-        has_push: Boolean(pushToken),
-      });
-
-      if (deviceId) {
-        await setDoc(
-          doc(firestore, "devices", deviceId),
-          { hasLead: true },
-          { merge: true }
-        );
-      }
-
-      await AsyncStorage.multiSet([
-        ["wizard_completed", "true"],
-        ["wizard_completed_at", String(Date.now())],
-        ["current_step", "1"],
-      ]);
+      // Lo local se guarda al instante; si Firestore tarda (red lenta) no se deja al usuario atorado aquí
+      await Promise.race([enviarSolicitud(data), new Promise((r) => setTimeout(r, 6000))]);
     } catch {}
   };
 

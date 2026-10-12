@@ -32,7 +32,7 @@ function harness({ store = new Map(), failRead = false, failWrite = false, failM
     async setItem(key, value) { if (failWrite) throw Error('write'); store.set(key, value); },
   };
   const logger = {
-    AppEvents: { CompletedRegistration: 'fb_mobile_complete_registration', AdImpression: 'AdImpression' },
+    AppEvents: { CompletedRegistration: 'fb_mobile_complete_registration', SubmitApplication: 'fb_mobile_submit_application', AdImpression: 'AdImpression' },
     AppEventParams: { Currency: 'fb_currency', AddType: 'fb_ad_type' },
     logEvent(...args) { if (failMeta) throw Error('SDK'); events.push(args); },
   };
@@ -148,28 +148,80 @@ test('un único listener PAID por interstitial, incluso al registrar dos veces; 
   assert.equal(ads(h).length, 2);
 });
 
-test('saveLead real: solo después de Firestore; no falla por Meta; no depende del siguiente guardado local', async () => {
-  const source = fs.readFileSync(path.join(root, 'app/analyzing.js'), 'utf8');
-  const ast = parser.parse(source, { sourceType: 'module', plugins: ['jsx'] });
-  let saveCode;
-  traverse(ast, { VariableDeclarator(p) { if (p.node.id.name === 'saveLead') saveCode = generate(p.node.init).code; } });
-  for (const mode of ['ok', 'firestoreFails', 'laterStorageFails', 'metaFails']) {
-    const order = [];
-    const h = harness({ failMeta: mode === 'metaFails' });
-    const save = vm.runInNewContext(`(${saveCode})`, {
-      savedRef: { current: false }, data: {}, firestore: {},
-      collection: () => ({}), doc: () => ({}), serverTimestamp: () => 1,
-      getCountry: () => 'MX', logEvent: async () => {}, setDoc: async () => {},
-      AsyncStorage: {
-        getItem: async () => null,
-        setItem: async () => { if (mode === 'laterStorageFails') throw Error('disk'); },
-        multiSet: async () => {},
-      },
-      addDoc: async () => { if (mode === 'firestoreFails') throw Error('network'); order.push('saved'); return { id: 'lead-1' }; },
+// Solicitud 1.7 (src/user/userStore.js): Meta solo después de que el lead quedó en Firestore,
+// nunca rompe por Meta, y si no había red se reintenta al volver a abrir la app (sin duplicar).
+function userStore({ firestoreFails = () => false, failMeta = false } = {}) {
+  const store = new Map(), writes = [], order = [];
+  const h = harness({ failMeta });
+  const config = load('src/router/config.js', {});
+  const routerMod = load('src/router/router.js', { './config.js': config });
+  const storage = {
+    async getItem(k) { return store.get(k) ?? null; },
+    async setItem(k, v) { store.set(k, v); },
+    async multiSet(pairs) { pairs.forEach(([k, v]) => store.set(k, v)); },
+  };
+  const api = load('src/user/userStore.js', {
+    '@react-native-async-storage/async-storage': storage,
+    'expo-constants': { expoConfig: { version: '1.7.0' } },
+    'firebase/firestore': {
+      doc: (_db, col, id) => ({ col, id }), increment: n => n, serverTimestamp: () => 'SERVER_TS',
+      async setDoc(ref, data) { if (firestoreFails()) throw Error('network'); writes.push({ ref, data }); order.push('saved'); },
+    },
+    '../analytics': { logEvent() {} },
+    '../config/remoteConfig': { getRemoteConfig: () => ({ unlockIntervalHours: 24, exploracionPct: 20 }) },
+    '../firebase': { firestore: {} },
+    '../metaEvents': {
       logCompleteRegistration(id) { order.push('meta'); h.api.logCompleteRegistration(id); },
-    });
-    await save(); await save();
-    assert.deepEqual(order, mode === 'firestoreFails' ? [] : ['saved', 'meta']);
-    assert.equal(h.events.length, ['firestoreFails', 'metaFails'].includes(mode) ? 0 : 1);
-  }
+      logSubmitApplication(t) { order.push('submit:' + t); h.api.logSubmitApplication(t); },
+    },
+    '../notifications/local': { programarDesbloqueo() { order.push('desbloqueo'); }, programarRecordatorio() {}, cancelarRecordatorio() {} },
+    '../router/config': config,
+    '../router/router': routerMod,
+  });
+  return { api, store, writes, order, h, config };
+}
+const solicitud = (c, extra = {}) => ({
+  nombre: 'Ana', apellidos: '', montoDeseado: c.MONTOS[1], ine: c.INE[0], cuenta: c.CUENTA[0],
+  situacionLaboral: 'Contrato Indefinido', ingresosMensuales: c.INGRESOS[1], prestamosActivos: c.PRESTAMOS_ACTIVOS[0], ...extra,
+});
+
+test('enviarSolicitud: Firestore primero, luego Meta (A/B manda SubmitApplication); sin respuestas crudas', async () => {
+  const u = userStore();
+  await u.api.enviarSolicitud(solicitud(u.config));
+  assert.deepEqual(u.order, ['desbloqueo', 'saved', 'meta', 'submit:A']);
+  assert.equal(u.h.events.length, 2);
+  const d = u.writes[0].data;
+  assert.equal(d.tier, 'A'); assert.equal(d.createdAt, 'SERVER_TS'); assert.equal(d.country, 'MX');
+  for (const k of ['nombre', 'apellidos', 'montoDeseado', 'ingresosMensuales', 'situacionLaboral']) assert.ok(!(k in d), k);
+  assert.equal(u.store.get('wizard_completed'), 'true');
+
+  const c = userStore();
+  await c.api.enviarSolicitud(solicitud(c.config, { situacionLaboral: 'Desempleado' }));
+  assert.deepEqual(c.order, ['desbloqueo', 'saved', 'meta']); // tier C: sin SubmitApplication
+});
+
+test('enviarSolicitud: sin red no manda Meta; al reabrir reintenta 1 vez con la hora real', async () => {
+  let offline = true;
+  const u = userStore({ firestoreFails: () => offline });
+  await u.api.enviarSolicitud(solicitud(u.config));
+  assert.deepEqual(u.order, ['desbloqueo']);
+  assert.equal(u.h.events.length, 0);
+  assert.equal(u.store.get('wizard_completed'), 'true'); // el usuario sigue su flujo
+  offline = false;
+  await u.api.iniciarProduccion();
+  const sol = u.writes.find(w => w.data.formVersion === 2);
+  assert.ok(sol && typeof sol.data.createdAt.getTime === 'function');
+  assert.equal(sol.data.createdAt.getTime(), Number(u.store.get('wizard_completed_at')));
+  assert.equal(u.h.events.length, 2);
+  await u.api.iniciarProduccion();
+  assert.equal(u.writes.filter(w => w.data.formVersion === 2).length, 1);
+  assert.equal(u.h.events.length, 2);
+});
+
+test('enviarSolicitud: si Meta falla no rompe y el lead queda guardado', async () => {
+  const u = userStore({ failMeta: true });
+  await u.api.enviarSolicitud(solicitud(u.config));
+  assert.equal(u.writes.length, 1);
+  assert.equal(u.store.get('solicitud_subida_v2'), '1');
+  assert.equal(u.h.events.length, 0);
 });

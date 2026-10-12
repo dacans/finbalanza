@@ -1,6 +1,4 @@
 // ─── Config dinámica de Expo ───────────────────────────────────────────────
-// Convertido desde app.json para poder leer variables de entorno (.env).
-// Expo carga automáticamente los archivos .env y los expone en process.env.
 // Mensaje de permiso ATT (App Tracking Transparency) en español, reutilizado
 // tanto en el infoPlist como en el plugin de expo-tracking-transparency.
 const ATT_MESSAGE =
@@ -10,7 +8,7 @@ export default {
   expo: {
     name: 'FinBalanza',
     slug: 'finbalanza',
-    version: '1.6.1',
+    version: '1.7.0',
     orientation: 'portrait',
     icon: './assets/icon.png',
     scheme: 'finbalanza',
@@ -23,7 +21,7 @@ export default {
       googleServicesFile: './GoogleService-Info.plist',
       infoPlist: {
         ITSAppUsesNonExemptEncryption: false,
-        // Permiso de seguimiento (ATT) requerido por AppsFlyer en iOS
+        // Permiso de seguimiento (ATT): Meta / AdMob
         NSUserTrackingUsageDescription: ATT_MESSAGE,
         SKAdNetworkItems: [
           { SKAdNetworkIdentifier: 'v9wttpbfk9.skadnetwork' },
@@ -88,13 +86,6 @@ export default {
       ],
       '@react-native-firebase/app',
       'expo-sqlite',
-      // ── AppsFlyer ──
-      [
-        'react-native-appsflyer',
-        {
-          shouldUseStrictMode: false,
-        },
-      ],
       // ── App Tracking Transparency (mismo mensaje que infoPlist) ──
       [
         'expo-tracking-transparency',
@@ -108,9 +99,6 @@ export default {
       eas: {
         projectId: '3ed6bd34-cb8b-414f-a415-ee8afb0abf8e',
       },
-      // Credenciales AppsFlyer leídas de variables de entorno (.env)
-      afDevKey: process.env.AF_DEV_KEY,
-      iosAppId: process.env.IOS_APP_ID,
     },
     owner: 'dacan',
   },
