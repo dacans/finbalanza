@@ -8,7 +8,7 @@ export default {
   expo: {
     name: 'FinBalanza',
     slug: 'finbalanza',
-    version: '1.7.0',
+    version: '1.7.1',
     orientation: 'portrait',
     icon: './assets/icon.png',
     scheme: 'finbalanza',
@@ -79,9 +79,12 @@ export default {
           appID: '1392210272341084',
           clientToken: 'e9c736c8579aaa325577a4b5367eb869',
           displayName: 'finbalanza',
+          // El SDK arranca a mano (Settings.initializeSDK en src/metaEvents.js)
           isAutoInitEnabled: false,
-          autoLogAppEventsEnabled: false,
-          advertiserIDCollectionEnabled: false,
+          // true → manda instalación / "Activar app": sin esto Meta no une al usuario con el anuncio
+          autoLogAppEventsEnabled: true,
+          // true → IDFA en los eventos de quien acepta el rastreo (ATT); se sincroniza en _layout tras el permiso
+          advertiserIDCollectionEnabled: true,
         },
       ],
       '@react-native-firebase/app',
