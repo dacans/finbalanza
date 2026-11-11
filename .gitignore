@@ -40,3 +40,24 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# --- nunca subir llaves ni basura (agregado 2026-11-10) ---
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+*.p8
+*.p12
+*.mobileprovision
+*adminsdk*.json
+serviceAccountKey.json
+sa-*.json
+keys/
+node_modules/
+.expo/
+dist/
+build/
+.gradle/
+local.properties
+.DS_Store
